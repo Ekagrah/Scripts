@@ -4,7 +4,7 @@
 
 ##------Start user editable section------##
 
-SERV_INSTALLDIR = '/opt/minecraft/mods/ATLauncher/Servers/SevTechAges_308'
+SERV_INSTALLDIR = '/opt/ATLauncher/Servers/SevTechAges_308'
 JAR = 'forge-1.12.2-14.23.4.2707-universal.jar'
 SERVER_HOSTNAME = ''
 
@@ -14,6 +14,7 @@ LINUX_USER_KEY = ''
 LINUX_USER_PASSWORD = ''
 SERV_PORT = '25565'
 RCON_SERVER_PORT = '25575'
+RCON_SERVER_PORT = ''
 RCON_PASSWORD = ''
 
 ##------End user editable section------##
@@ -32,14 +33,13 @@ import time
 
 CURR_DATE = time.strftime("%b%d_%H-%M")
 
-
-def VARIABLE_CHK():
-    """Verify needed variables have proper value"""
-    
-    class TermColor:
+class TermColor:
         RED = '\033[93;41m'
         MAGENTA = '\033[35m'
         DEFAULT = '\033[00m'
+
+def VARIABLE_CHK():
+    """Verify needed variables have proper value"""
     
     varchk = [SERV_INSTALLDIR, SERVER_HOSTNAME, SERV_PORT, RCON_SERVER_PORT, RCON_PASSWORD, LINUX_USER]
     
@@ -99,6 +99,7 @@ def get_args():
         
     ## Array for argument(s) passed to script
     args = parser.parse_args()
+    
     start = args.start
     shutdown = args.shutdown
     restart = args.restart
@@ -128,119 +129,81 @@ class ssh:
             print("No valid authenication methods provided")
             sys.exit(2)
     
-    def sendCommand(self, command, stdoutwrite=False, timeout=10, recv_size=2048):
-        """Send command over ssh transport connection"""
-        if self.client:
-            self.transport = self.client.get_transport()
-            self.channel = self.transport.open_session()
-            ## verify transport open or exit gracefully
-            if self.channel:
-                self.channel.settimeout(timeout)
-                self.channel.exec_command(command)
-                self.channel.shutdown_write()
-                stdout, stderr = [], []
-                while not self.channel.exit_status_ready():
-                    if self.channel.recv_ready():
-                        stdout.append(self.channel.recv(recv_size).decode("utf-8"))
-                        if stdoutwrite:
-                            sys.stdout.write(' '.join(stdout))    
-                    
-                    if self.channel.recv_stderr_ready():
-                        stderr.append(self.channel.recv_stderr(recv_size).decode("utf-8"))
-                exit_status = self.channel.recv_exit_status()
-                
-                while True:
-                    try:
-                        remainder_recvd = self.channel.recv(recv_size).decode("utf-8")
-                        if not remainder_recvd and not self.channel.recv_ready():
-                            break
-                        else:
-                            stdout.append(remainder_recvd)
-                            if stdoutwrite:
-                                sys.stdout.write(' '.join(stdout))
-                    except socket.timeout:
-                        break
-                        
-                while True:
-                    try:
-                        remainder_stderr = self.channel.recv_stderr(recv_size).decode("utf-8")
-                        if not remainder_stderr and not self.channel.recv_stderr_ready():
-                            break
-                        else:
-                            stderr.append(remainder_stderr)
-                    except socket.timeout:
-                        break
-                        
-                stdout = ''.join(stdout)
-                stderr = ''.join(stderr)
-                
-                #return (stdout, stderr, exit_status)
-                return stdout
-                        
-        else:
-            print(TermColor.RED)
-            sys.exit("Connection not opened.")
-    ## end def sendCommand
-    
-    def parseCommand(self, command, target, stdoutwrite=False, timeout=0, recv_size=2048):
-        """Send command over ssh transport connection, regex pattern matching to see if return is desireable"""
-        if self.client:
-            self.transport = self.client.get_transport()
-            self.channel = self.transport.open_session()
-            if self.channel:
-                self.channel.settimeout(timeout)
-                self.channel.exec_command(command)
-                self.channel.shutdown_write()
-                fd, fp = tempfile.mkstemp()
-                f = open(fp, 'a+')
-                stdout, stderr = [], []
-                while not self.channel.exit_status_ready():
-                    if self.channel.recv_ready():
-                        recvd = self.channel.recv(recv_size).decode("utf-8")
+    def sendCommand(self, command, stdoutwrite=False, parse=False, target=None, timeout=10, recv_size=2048):
+        """Send command over ssh transport channel"""
+        
+        parse_return = None
+        self.transport = self.client.get_transport()
+        self.channel = self.transport.open_channel(kind='session')
+        self.channel.settimeout(timeout)
+        ## verify channel open or exit gracefully
+        try:
+            self.channel.exec_command(command)
+            self.channel.shutdown(1)
+            fd, fp = tempfile.mkstemp()
+            f = open(fp, 'a+')
+            stdout, stderr = [], []
+            while not self.channel.exit_status_ready():
+                if self.channel.recv_ready():
+                    recvd = self.channel.recv(recv_size).decode("utf-8")
+                    stdout.append(recvd)
+                    if stdoutwrite:
+                        sys.stdout.write(' '.join(recvd))
+                    if parse:
                         f.write(recvd)
-                        if stdoutwrite:
-                            sys.stdout.write(recvd)
-                    
-                    if self.channel.recv_stderr_ready():
-                        stderr.append(self.channel.recv_stderr(recv_size).decode("utf-8"))
-                exit_status = self.channel.recv_exit_status()
                 
-                while True:
-                    try:
-                        remainder_recvd = self.channel.recv(recv_size).decode("utf-8")
-                        if not remainder_recvd and not self.channel.recv_ready():
-                            break
-                        else:
+                if self.channel.recv_stderr_ready():
+                    stderr.append(self.channel.recv_stderr(recv_size).decode("utf-8"))
+                    #raise
+            
+            while True:
+                try:
+                    remainder_recvd = self.channel.recv(recv_size).decode("utf-8")
+                    if not remainder_recvd and not self.channel.recv_ready():
+                        break
+                    else:
+                        stdout.append(remainder_recvd)
+                        
+                        if stdoutwrite:
+                            sys.stdout.write(' '.join(stdout))
+                        if parse:
                             f.write(remainder_recvd)
-                            if stdoutwrite:
-                                sys.stdout.write(remainder_recvd)
-                    except socket.timeout:
-                        continue
-                        
-                while True:
-                    try:
-                        remainder_stderr = self.channel.recv_stderr(recv_size).decode("utf-8")
-                        if not remainder_stderr and not self.channel.recv_stderr_ready():
-                            break
-                        else:
-                            stderr.append(remainder_stderr)
-                    except socket.timeout:
-                        continue
-                        
+                except socket.timeout:
+                    break
+                    
+            while True:
+                try:
+                    remainder_stderr = self.channel.recv_stderr(recv_size).decode("utf-8")
+                    if not remainder_stderr and not self.channel.recv_stderr_ready():
+                        break
+                    else:
+                        stderr.append(remainder_stderr)
+                except socket.timeout:
+                    break
+            
+            exit_status = self.channel.recv_exit_status()
+            
+            if parse:
                 with open(fp) as f:
                     f.seek(0)
                     pattern = re.compile(target)
                     for line in f:
                         if pattern.match(line):
-                            return True
+                            parse_return = True
                             break
                         else:
-                            return False
-                        
-        else:
+                            parse_return = False
+        except SSHException:
             print(TermColor.RED)
             sys.exit("Connection not opened.")
-    ## end def parseCommand
+            
+        if parse:
+            return parse_return
+        else:
+            #stdout = ' '.join(stdout)
+            #stderr = ' '.join(stderr)
+            return stdout, stderr, exit_status
+    ## end def sendCommand
 ## end ssh class
 
 
@@ -306,7 +269,7 @@ def RCON_CLIENT(*args):
             print("RCON command sent: {}".format(command_string))
         else:
             command_string = input("RCON Command: ")
-            if command_string in ('exit', 'Exit', 'E'):
+            if command_string in ('exit', 'Exit'):
                 
                 if sock:
                     sock.shutdown(socket.SHUT_RDWR)
@@ -350,86 +313,33 @@ def LIST_PLAYERS():
 
 def CHECK_PLAYERS():
     """Check if players are connected to server"""
-    chktimeout=9
-    while True:
-        if chktimeout > 0:
-            PLAYER_LIST = RCON_CLIENT('/list')
-            pattern = re.compile(".*0/[0-9]+.*")
-            if pattern.search(PLAYER_LIST):
-                no_players = True
-                break
-            else:
-                print(PLAYER_LIST)
-                time.sleep(20)
-                chktimeout -= 1
-        else:
-            print('Timeout waiting for users to log off')
-            no_players = "timeout"
-            return False
-    return no_players
-
-
-def UPSERVER():
-    TMUX_CHK = sshconnect.parseCommand("/usr/bin/tmux list-session | /usr/bin/cut -d \: -f 1", "minecraft")
-    if TMUX_CHK:
-        print("Server seems to be running already")
-    else:
-        print("Starting server")
-        sshconnect.sendCommand('cd {0} ; tmux new-session -d -x 23 -y 80 -s minecraft java -Xmx6G -jar {1} nogui'.format(SERV_INSTALLDIR, JAR))
     
-
-def DOWNSERVER():
-    """Shutdown server instance"""
-    
-    downcounter = 7
-    UPCHK = sshconnect.parseCommand("/usr/bin/tmux list-session | /usr/bin/cut -d \: -f 1", "minecraft")
-    if UPCHK:
-        print("Shutting down server...")
-        RCON_CLIENT("/stop")
-        time.sleep(10)
-    else:
-        print("Unable to find running server")
-    while True:
-        ALT_CHK = sshconnect.parseCommand("/usr/bin/pgrep -x java 2>/dev/null", "[0-9]*")
-        if ALT_CHK:
-            if downcounter == 0:
-                print('Forcfully killing server instance')
-                sshconnect.sendCommand("for i in $(/usr/bin/pgrep -c java 2>/dev/null); do kill -9 $i; done")
-                break
-            else:
-                print("Waiting for server to go down gracefully")
-                time.sleep(10)
-                downcounter -= 1
-        else:
-            print("Unable to find running server")
+    chktimeout = 9
+    while chktimeout > 0:
+        PLAYER_LIST = RCON_CLIENT('/list')
+        pattern = re.compile(".*0/[0-9]+.*")
+        if pattern.search(PLAYER_LIST):
             break
-
-
-def RESTART_SERVER():
-    """Check if players connected then shutdown and start server"""
-    
-    RCON_CLIENT("/say Server going down for maintenance in 3 minutes")
-    
-    evac = CHECK_PLAYERS()
-    
-    if evac is "timeout":
-        return evac
+        else:
+            print(PLAYER_LIST)
+            time.sleep(20)
+            chktimeout -= 1
+    if chktimeout == 0:
+        print('Timeout waiting for users to log off')
+        return False
     else:
-        print("Restarting server...")
-        DOWNSERVER()
-        time.sleep(10)
-        UPSERVER()
-    
+        return True
+        
 
 def SERV_MONITOR():
     """Checks on status of server"""
     ## increase as needed, especially when using mods
     upcounter = 7
-    SERV_STATUS_CHK = sshconnect.parseCommand("/usr/bin/pgrep -x tmux 2>/dev/null", "[0-9]*")
+    SERV_STATUS_CHK = sshconnect.sendCommand("/usr/bin/pgrep -x tmux 2>/dev/null", parse=True, target="[0-9]*")
     if SERV_STATUS_CHK:
         print("Server is running")
         while True:
-            PORT_CHK = sshconnect.parseCommand("/bin/netstat -l 2>/dev/null | /bin/grep -E '.*:{}.*'".format(SERV_PORT), ".*:{}.*".format(SERV_PORT))
+            PORT_CHK = sshconnect.sendCommand("/bin/netstat -l 2>/dev/null | /bin/grep -E '.*:{}.*'".format(SERV_PORT), parse=True, target=".*:{}.*".format(SERV_PORT))
             if PORT_CHK:
                 print("Server is up and should be accessible")
                 break
@@ -443,6 +353,59 @@ def SERV_MONITOR():
                     break
     else:
         print("Server does not seem to be running")
+
+
+def UPSERVER():
+    TMUX_CHK = sshconnect.sendCommand("/usr/bin/tmux list-session | /usr/bin/cut -d \: -f 1", parse=True, target="minecraft")
+    if TMUX_CHK:
+        print("Server seems to be running already")
+    else:
+        print("Starting server")
+        sshconnect.sendCommand('cd {0} ; tmux new-session -d -x 23 -y 80 -s minecraft java -Xmx10G -jar {1} nogui'.format(SERV_INSTALLDIR, JAR))
+        SERV_MONITOR()
+    
+
+def DOWNSERVER():
+    """Shutdown server instance"""
+    
+    downcounter = 7
+    UPCHK = sshconnect.sendCommand("/usr/bin/tmux list-session | /usr/bin/cut -d \: -f 1", parse=True, target="minecraft")
+    if UPCHK:
+        print("Shutting down server...")
+        RCON_CLIENT("/stop")
+        time.sleep(10)
+    else:
+        print("Unable to find running server")
+    while True:
+        ALT_CHK = sshconnect.sendCommand("/usr/bin/pgrep -x java 2>/dev/null", parse=True, target="[0-9]*")
+        if ALT_CHK:
+            if downcounter == 0:
+                print('Forcfully killing server instance')
+                sshconnect.sendCommand("for i in $(/usr/bin/pgrep -c java 2>/dev/null); do kill -9 $i; done")
+                SERV_MONITOR()
+                break
+            else:
+                print("Waiting for server to go down gracefully")
+                time.sleep(10)
+                downcounter -= 1
+        else:
+            print("Unable to find running server")
+            break
+
+
+def RESTART_SERVER():
+    """Check if players have disconnected then shutdown and start server"""
+    
+    RCON_CLIENT("/say Server going down for maintenance in 3 minutes")
+    
+    if CHECK_PLAYERS():
+        print("Proceeding to restart server...")
+        DOWNSERVER()
+        SERV_MONITOR()
+        time.sleep(10)
+        UPSERVER()
+    else:
+        sys.exit(3)
 
 
 def FNC_DO_SAVE():
@@ -464,7 +427,7 @@ while True:
     command_string = ''
     if len(sys.argv) < 2:
         command_string = input("Command: ")
-        if command_string in ('exit', 'Exit', 'E'):
+        if command_string in ('exit', 'Exit'):
             if sshconnect:
                 sshconnect.client.close()
             sys.exit('Exiting mgmt program')
@@ -501,13 +464,10 @@ while True:
     
     if start:
         UPSERVER()
-        SERV_MONITOR()
     elif shutdown:
         DOWNSERVER()
-        SERV_MONITOR()
     elif restart:
         RESTART_SERVER()
-        SERV_MONITOR()
     elif monitor:
         SERV_MONITOR()
     elif save:
