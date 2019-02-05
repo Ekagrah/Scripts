@@ -6,16 +6,15 @@
 
 SERV_INSTALLDIR = '/opt/ATLauncher/Servers/SevTechAges_308'
 JAR = 'forge-1.12.2-14.23.4.2707-universal.jar'
-SERVER_HOSTNAME = ''
+SERVER_HOSTNAME = 'minecraft.example.us'
 
-LINUX_USER = ''
+LINUX_USER = 'minecraft'
 ## key needs to be an openssh compatible format, if key file exists use that otherwise use password
 LINUX_USER_KEY = ''
-LINUX_USER_PASSWORD = ''
+LINUX_USER_PASSWORD = 'password'
 SERV_PORT = '25565'
 RCON_SERVER_PORT = '25575'
-RCON_SERVER_PORT = ''
-RCON_PASSWORD = ''
+RCON_PASSWORD = 'secret'
 
 ##------End user editable section------##
 
@@ -334,12 +333,12 @@ def CHECK_PLAYERS():
 def SERV_MONITOR():
     """Checks on status of server"""
     ## increase as needed, especially when using mods
-    upcounter = 7
+    upcounter = 12
     SERV_STATUS_CHK = sshconnect.sendCommand("/usr/bin/pgrep -x tmux 2>/dev/null", parse=True, target="[0-9]*")
     if SERV_STATUS_CHK:
         print("Server is running")
         while True:
-            PORT_CHK = sshconnect.sendCommand("/bin/netstat -l 2>/dev/null | /bin/grep -E '.*:{}.*'".format(SERV_PORT), parse=True, target=".*:{}.*".format(SERV_PORT))
+            PORT_CHK = sshconnect.sendCommand("/bin/netstat -l 2>/dev/null | /bin/grep -E '.*:{}.*'".format(RCON_SERVER_PORT), parse=True, target=".*:{}.*".format(RCON_SERVER_PORT))
             if PORT_CHK:
                 print("Server is up and should be accessible")
                 break
@@ -361,8 +360,9 @@ def UPSERVER():
         print("Server seems to be running already")
     else:
         print("Starting server")
-        sshconnect.sendCommand('cd {0} ; tmux new-session -d -x 23 -y 80 -s minecraft java -Xmx10G -jar {1} nogui'.format(SERV_INSTALLDIR, JAR))
+        sshconnect.sendCommand('cd {0} ; tmux new-session -d -x 23 -y 80 -s minecraft java -server -Xmx6G -Xms6G -XX:+UseG1GC -XX:ParallelGCThreads=2 -XX:MaxGCPauseMillis=80 -jar {1} nogui'.format(SERV_INSTALLDIR, JAR))
         SERV_MONITOR()
+        ## -XX:MaxPermSize=1G, -XX:MaxMetaspaceSize=512M, -XX:+UseConcMarkSweepGC, -Xms512M
     
 
 def DOWNSERVER():
@@ -399,7 +399,7 @@ def RESTART_SERVER():
     RCON_CLIENT("/say Server going down for maintenance in 3 minutes")
     
     if CHECK_PLAYERS():
-        print("Proceeding to restart server...")
+        print("Proceeding to restart server.\n")
         DOWNSERVER()
         SERV_MONITOR()
         time.sleep(10)
