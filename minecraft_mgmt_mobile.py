@@ -6,13 +6,14 @@
 
 SERV_INSTALLDIR = '/opt/ATLauncher/Servers/SevTechAges_308'
 JAR = 'forge-1.12.2-14.23.4.2707-universal.jar'
-SERVER_HOSTNAME = 'minecraft.example.us'
+SERVER_HOSTNAME = '10.0.0.221'
 
 LINUX_USER = 'minecraft'
 ## key needs to be an openssh compatible format, if key file exists use that otherwise use password
 LINUX_USER_KEY = ''
 LINUX_USER_PASSWORD = 'password'
 SERV_PORT = '25565'
+## Requires a running rcon port to validate server is fully ready. Otherwise need to adjust MONITOR function
 RCON_SERVER_PORT = '25575'
 RCON_PASSWORD = 'secret'
 
@@ -129,7 +130,7 @@ class ssh:
             sys.exit(2)
     
     def sendCommand(self, command, stdoutwrite=False, parse=False, target=None, timeout=10, recv_size=2048):
-        """Send command over ssh transport channel"""
+        """Method to send command over ssh transport channel"""
         
         parse_return = None
         self.transport = self.client.get_transport()
@@ -199,8 +200,6 @@ class ssh:
         if parse:
             return parse_return
         else:
-            #stdout = ' '.join(stdout)
-            #stderr = ' '.join(stderr)
             return stdout, stderr, exit_status
     ## end def sendCommand
 ## end ssh class
@@ -248,10 +247,10 @@ def RCON_CLIENT(*args):
             (response_id,response_type,response_string,response_dummy) = remain_packet
             if (response_string is None or response_string is str(b'\x00')) and response_id is not 2:
                 response_string = "(Empty Response)"
-            return (response_string, response_id, response_type)
         except socket.timeout:
             response_string = "(Connection Timeout)"
-            return (response_string, response_id, response_type)
+        
+        return (response_string, response_id, response_type)
 
     
     ## Begin main loop
@@ -281,7 +280,8 @@ def RCON_CLIENT(*args):
         try:
             sock = socket.create_connection((SERVER_HOSTNAME, RCON_SERVER_PORT))
         except ConnectionRefusedError:
-            print("Unable to make RCON connection")
+            #print("Unable to make RCON connection")
+            raise
             break
         
         sock.settimeout(RCON_SERVER_TIMEOUT)
@@ -306,8 +306,13 @@ def RCON_CLIENT(*args):
 
 def LIST_PLAYERS():
     """List players connected to server"""
-    PLAYER_LIST = RCON_CLIENT('/list')
-    print(PLAYER_LIST)
+    
+    try:
+        PLAYER_LIST = RCON_CLIENT('/list')
+        print(PLAYER_LIST)
+    except:
+        err = sys.exc_info()[1]
+        print("Error: {}".format(err))
 
 
 def CHECK_PLAYERS():
@@ -315,7 +320,12 @@ def CHECK_PLAYERS():
     
     chktimeout = 9
     while chktimeout > 0:
-        PLAYER_LIST = RCON_CLIENT('/list')
+        try:
+            PLAYER_LIST = RCON_CLIENT('/list')
+        except:
+            err = sys.exc_info()[1]
+            print("Error: {}".format(err))
+            break
         pattern = re.compile(".*0/[0-9]+.*")
         if pattern.search(PLAYER_LIST):
             break
@@ -325,6 +335,8 @@ def CHECK_PLAYERS():
             chktimeout -= 1
     if chktimeout == 0:
         print('Timeout waiting for users to log off')
+        return False
+    elif err:
         return False
     else:
         return True
@@ -361,8 +373,9 @@ def UPSERVER():
     else:
         print("Starting server")
         sshconnect.sendCommand('cd {0} ; tmux new-session -d -x 23 -y 80 -s minecraft java -server -Xmx6G -Xms6G -XX:+UseG1GC -XX:ParallelGCThreads=2 -XX:MaxGCPauseMillis=80 -jar {1} nogui'.format(SERV_INSTALLDIR, JAR))
-        SERV_MONITOR()
         ## -XX:MaxPermSize=1G, -XX:MaxMetaspaceSize=512M, -XX:+UseConcMarkSweepGC, -Xms512M
+        
+        SERV_MONITOR()
     
 
 def DOWNSERVER():
@@ -372,11 +385,18 @@ def DOWNSERVER():
     UPCHK = sshconnect.sendCommand("/usr/bin/tmux list-session | /usr/bin/cut -d \: -f 1", parse=True, target="minecraft")
     if UPCHK:
         print("Shutting down server...")
-        RCON_CLIENT("/stop")
-        time.sleep(10)
+        try:
+            RCON_CLIENT("/stop")
+            time.sleep(10)
+        except:
+            err = sys.exc_info()[1]
+            print("Error: {}".format(err))
     else:
         print("Unable to find running server")
     while True:
+        if err:
+            break
+        
         ALT_CHK = sshconnect.sendCommand("/usr/bin/pgrep -x java 2>/dev/null", parse=True, target="[0-9]*")
         if ALT_CHK:
             if downcounter == 0:
@@ -389,23 +409,25 @@ def DOWNSERVER():
                 time.sleep(10)
                 downcounter -= 1
         else:
-            print("Unable to find running server")
+            print("Definitely no running server")
             break
 
 
 def RESTART_SERVER():
     """Check if players have disconnected then shutdown and start server"""
     
-    RCON_CLIENT("/say Server going down for maintenance in 3 minutes")
-    
-    if CHECK_PLAYERS():
-        print("Proceeding to restart server.\n")
-        DOWNSERVER()
-        SERV_MONITOR()
-        time.sleep(10)
-        UPSERVER()
-    else:
-        sys.exit(3)
+    try: 
+        RCON_CLIENT("/say Server going down for maintenance in 3 minutes")
+        
+        if CHECK_PLAYERS():
+            print("Proceeding to restart server.\n")
+            DOWNSERVER()
+            SERV_MONITOR()
+            time.sleep(10)
+            UPSERVER()
+    except:
+        err = sys.exc_info()[1]
+        print("Error: {}".format(err))
 
 
 def FNC_DO_SAVE():
