@@ -2,26 +2,30 @@
 
 ## Designed to run from an iOS device with pythonista to a linux hosted server
 
+## VBoxManage startvm "minecraft-serv" --type headless
+## tmux attach-session -t minecraft > crtl+b then d
+
+
 ##------Start user editable section------##
 
-SERV_INSTALLDIR = '/opt/ATLauncher/Servers/SevTechAges_308'
-JAR = 'forge-1.12.2-14.23.4.2707-universal.jar'
-SERVER_HOSTNAME = '10.0.0.221'
+WORLD_NAME = 'RADical'
+SERV_INSTALLDIR = '/opt/curse-forge/RAD-1.30/'
+JAR = 'forge-1.12.2-14.23.5.2838-universal.jar'
+SERVER_HOSTNAME = '192.168.0.0'
 
-LINUX_USER = 'minecraft'
+LINUX_USER = 'user'
 ## key needs to be an openssh compatible format, if key file exists use that otherwise use password
 LINUX_USER_KEY = ''
-LINUX_USER_PASSWORD = 'password'
+LINUX_USER_PASSWORD = 'secret'
 SERV_PORT = '25565'
 ## Requires a running rcon port to validate server is fully ready. Otherwise need to adjust MONITOR function
 RCON_SERVER_PORT = '25575'
 RCON_PASSWORD = 'secret'
 
-##------End user editable section------##
+##-------End user editable section-------##
 
 import argparse
 import datetime
-import logging
 import os
 import paramiko
 import re
@@ -51,7 +55,7 @@ def VARIABLE_CHK():
         if not x:
             err_on_var.append(varlist[id])
             break
-        elif id in  ("3", "4"):
+        elif id in ("3", "4"):
             ## if these variables are not integers then flag, converting to float for good measure
             if not float(x).is_integer():
                 invalid_var.append(varlist[id])
@@ -95,6 +99,8 @@ def get_args():
         '--save', help='Makes a copy of server config, map save data, and player data files', action='store_true')
     parser.add_argument(
         '--listplayers', help='Lists players that are connected to server', action='store_true')
+    parser.add_argument(
+        '--email', help='Send stats email', action='store_true')
         
         
     ## Array for argument(s) passed to script
@@ -107,12 +113,13 @@ def get_args():
     rcon = args.rcon
     save = args.save
     listplayers = args.listplayers
+    email = args.email
     ## Return all variable values
-    return start, shutdown, restart, monitor, rcon, save, listplayers
+    return start, shutdown, restart, monitor, rcon, save, listplayers, email
     
 
 class ssh:
-    """Create ssh connection"""
+    """class for ssh connection"""
     client = None
     def __init__(self, server, port, user, password=None):
         "Create ssh connection"
@@ -126,8 +133,8 @@ class ssh:
         elif password:
             self.client.connect(server, port, username=user, password=password)
         else:
-            print("No valid authenication methods provided")
-            sys.exit(2)
+            sys.exit("No valid authenication methods provided")
+
     
     def sendCommand(self, command, stdoutwrite=False, parse=False, target=None, timeout=10, recv_size=2048):
         """Method to send command over ssh transport channel"""
@@ -148,13 +155,12 @@ class ssh:
                     recvd = self.channel.recv(recv_size).decode("utf-8")
                     stdout.append(recvd)
                     if stdoutwrite:
-                        sys.stdout.write(' '.join(recvd))
+                        sys.stdout.write(''.join(recvd))
                     if parse:
                         f.write(recvd)
                 
                 if self.channel.recv_stderr_ready():
                     stderr.append(self.channel.recv_stderr(recv_size).decode("utf-8"))
-                    #raise
             
             while True:
                 try:
@@ -165,7 +171,7 @@ class ssh:
                         stdout.append(remainder_recvd)
                         
                         if stdoutwrite:
-                            sys.stdout.write(' '.join(stdout))
+                            sys.stdout.write(''.join(stdout))
                         if parse:
                             f.write(remainder_recvd)
                 except socket.timeout:
@@ -178,6 +184,10 @@ class ssh:
                         break
                     else:
                         stderr.append(remainder_stderr)
+                        
+                        if stdoutwrite:
+                            sys.stdout.write(''.join("Error ", stderr))
+                            
                 except socket.timeout:
                     break
             
@@ -193,9 +203,11 @@ class ssh:
                             break
                         else:
                             parse_return = False
-        except SSHException:
+        except:
+            ## SSHException
+            err, err_value, err_trace = sys.exc_info()
             print(TermColor.RED)
-            sys.exit("Connection not opened.")
+            sys.exit("Error {}: {}".format(err_value, err))
             
         if parse:
             return parse_return
@@ -205,8 +217,18 @@ class ssh:
 ## end ssh class
 
 
+def UPCHK():
+    '''Check if there is a tmux session titled "minecraft" '''
+    
+    do_check = sshconnect.sendCommand("/usr/bin/tmux list-session 2>/dev/null | /usr/bin/cut -d \: -f 1", parse=True, target="minecraft")
+    return do_check
+
+
 def RCON_CLIENT(*args):
     """Remote Console Port access. Limited commands are available. Original code by Dunto, updated/modified by Ekagrah. Minor adjustments for Minecraft output."""
+        
+    if not UPCHK():
+        sys.exit("Server not running, no RCON available")
         
     ## DO NOT EDIT THESE VARIABLES UNLESS YOU UNDERSTAND THE CONSEQUENCES
     MESSAGE_TYPE_AUTH = 3
@@ -249,6 +271,8 @@ def RCON_CLIENT(*args):
                 response_string = "(Empty Response)"
         except socket.timeout:
             response_string = "(Connection Timeout)"
+        except:
+            response_string = "(Error) Response ID: {}".format(response_id)
         
         return (response_string, response_id, response_type)
 
@@ -274,13 +298,16 @@ def RCON_CLIENT(*args):
                     sock.close()
                 print("Exiting rcon client...\n")
                 break
+            elif command_string in ('help','h','Help'):
+                print('\tUse exit or Exit to quit.')
+                print('Tested commands: /deop, /help, /kick, /msg, /op, /time, /save, /say, /stop, /weather')
+                continue
             elif command_string in ('') or not command_string:
                 continue
 
         try:
             sock = socket.create_connection((SERVER_HOSTNAME, RCON_SERVER_PORT))
         except ConnectionRefusedError:
-            #print("Unable to make RCON connection")
             raise
             break
         
@@ -292,7 +319,10 @@ def RCON_CLIENT(*args):
 
         sendMessage(sock, command_string, MESSAGE_TYPE_COMMAND)
         response_string,response_id,response_type = getResponse(sock)
-        response_txt = response_string.decode(encoding=('UTF-8'))[:-1]
+        try:
+            response_txt = response_string.decode(encoding=('UTF-8'))[:-1]
+        except AttributeError:
+            response_txt = response_string
         
         if interactive_mode:
             print(response_txt)
@@ -307,6 +337,7 @@ def RCON_CLIENT(*args):
 def LIST_PLAYERS():
     """List players connected to server"""
     
+    err = ''
     try:
         PLAYER_LIST = RCON_CLIENT('/list')
         print(PLAYER_LIST)
@@ -316,8 +347,9 @@ def LIST_PLAYERS():
 
 
 def CHECK_PLAYERS():
-    """Check if players are connected to server"""
+    """Check if players are connected to server. Returns True when no one is connected"""
     
+    err = ''
     chktimeout = 9
     while chktimeout > 0:
         try:
@@ -326,7 +358,7 @@ def CHECK_PLAYERS():
             err = sys.exc_info()[1]
             print("Error: {}".format(err))
             break
-        pattern = re.compile(".*0/[0-9]+.*")
+        pattern = re.compile(".*0.*[0-9]+.*")
         if pattern.search(PLAYER_LIST):
             break
         else:
@@ -344,8 +376,9 @@ def CHECK_PLAYERS():
 
 def SERV_MONITOR():
     """Checks on status of server"""
-    ## increase as needed, especially when using mods
-    upcounter = 12
+    
+    ## increase as needed, especially when using community packs/mods
+    upcounter = 14
     SERV_STATUS_CHK = sshconnect.sendCommand("/usr/bin/pgrep -x tmux 2>/dev/null", parse=True, target="[0-9]*")
     if SERV_STATUS_CHK:
         print("Server is running")
@@ -367,13 +400,17 @@ def SERV_MONITOR():
 
 
 def UPSERVER():
-    TMUX_CHK = sshconnect.sendCommand("/usr/bin/tmux list-session | /usr/bin/cut -d \: -f 1", parse=True, target="minecraft")
-    if TMUX_CHK:
+    
+    if UPCHK():
         print("Server seems to be running already")
     else:
         print("Starting server")
-        sshconnect.sendCommand('cd {0} ; tmux new-session -d -x 23 -y 80 -s minecraft java -server -Xmx6G -Xms6G -XX:+UseG1GC -XX:ParallelGCThreads=2 -XX:MaxGCPauseMillis=80 -jar {1} nogui'.format(SERV_INSTALLDIR, JAR))
-        ## -XX:MaxPermSize=1G, -XX:MaxMetaspaceSize=512M, -XX:+UseConcMarkSweepGC, -Xms512M
+        sshconnect.sendCommand('cd {0} ; tmux new-session -d -x 23 -y 80 -s minecraft java -server -Xmx10G -Xms6G -XX:+UseG1GC -XX:ParallelGCThreads=2 -XX:MaxGCPauseMillis=80 -jar {1} nogui'.format(SERV_INSTALLDIR, JAR))
+        ## can add option listed below to accept fml changes automatically
+        ## -Dfml.queryResult=confirm
+        ## or use use the server console accessed by:
+        ## tmux attach-session -t minecraft
+        ## ctrl + b then d to disconnect
         
         SERV_MONITOR()
     
@@ -381,18 +418,16 @@ def UPSERVER():
 def DOWNSERVER():
     """Shutdown server instance"""
     
+    err = ''
     downcounter = 7
-    UPCHK = sshconnect.sendCommand("/usr/bin/tmux list-session | /usr/bin/cut -d \: -f 1", parse=True, target="minecraft")
-    if UPCHK:
+    try:
         print("Shutting down server...")
-        try:
-            RCON_CLIENT("/stop")
-            time.sleep(10)
-        except:
-            err = sys.exc_info()[1]
-            print("Error: {}".format(err))
-    else:
-        print("Unable to find running server")
+        RCON_CLIENT("/stop")
+        time.sleep(5)
+    except:
+        err = sys.exc_info()[1]
+        print("Error: {}".format(err))
+    
     while True:
         if err:
             break
@@ -416,26 +451,27 @@ def DOWNSERVER():
 def RESTART_SERVER():
     """Check if players have disconnected then shutdown and start server"""
     
-    try: 
-        RCON_CLIENT("/say Server going down for maintenance in 3 minutes")
+    err = ''
+    if UPCHK():
+        RCON_CLIENT("/say Server restarting in 3 minutes")
         
         if CHECK_PLAYERS():
-            print("Proceeding to restart server.\n")
+            print("Proceeding to restart server...\n")
             DOWNSERVER()
-            SERV_MONITOR()
-            time.sleep(10)
+            time.sleep(5)
             UPSERVER()
-    except:
-        err = sys.exc_info()[1]
-        print("Error: {}".format(err))
-
-
+        
+        
+## These functions depend on the local script (on the server) being present
 def FNC_DO_SAVE():
-    """Archive world, player, and configuration files into a tar"""
+    '''backups done by aroma1997 or ftbbackups mod in packs I've used'''
     
-    ## backups handled by aromabackups mod
-    ## SERV_SAVE_DIR = "{}/backups/{}/".format(SERV_INSTALLDIR, WORLD_NAME)
+    sshconnect.sendCommand("/opt/bin/minecraft_mgmt_local.py --save", stdoutwrite=True)
+    
 
+def EMAIL():
+    sshconnect.sendCommand("/opt/bin/minecraft_mgmt_local.py --email")
+    
 
 #============================#
 
@@ -455,7 +491,12 @@ while True:
             sys.exit('Exiting mgmt program')
         elif not command_string:
             continue
+        elif command_string == 'help':
+            print('With interactive mode, same args are available but only accepted without "--"\n')
+            mylist.append('--{}'.format(command_string))
+            sys.argv = [working_sys_argv[0]] + mylist
         else:
+            ## Format so that the option can be used with argparse
             mylist.append('--{}'.format(command_string))
             sys.argv = [working_sys_argv[0]] + mylist
     elif len(sys.argv) == 2:
@@ -466,35 +507,33 @@ while True:
         break
     
     ## Run get_args
-    start, shutdown, restart, monitor, rcon, save, listplayers = get_args()
-            
-    if listplayers:
-        LIST_PLAYERS()
-        if cmdline:
-            sys.exit(0)
-        else:
-            continue
-    elif rcon:
-        RCON_CLIENT()
-        if cmdline:
-            sys.exit(0)
-        else:
-            continue
-    
+    try:
+        start, shutdown, restart, monitor, rcon, save, listplayers, email = get_args()
+    except:
+        continue
+        
     ## Create ssh connection
     sshconnect = ssh(SERVER_HOSTNAME, 22, LINUX_USER, LINUX_USER_PASSWORD)
     
-    if start:
+    if listplayers:
+        LIST_PLAYERS()
+    elif rcon:
+        RCON_CLIENT()
+    elif start:
         UPSERVER()
     elif shutdown:
-        DOWNSERVER()
+        if UPCHK():
+            RCON_CLIENT("/say Server shutting down in 3 minutes")
+            if CHECK_PLAYERS():
+                DOWNSERVER()
     elif restart:
         RESTART_SERVER()
     elif monitor:
         SERV_MONITOR()
     elif save:
-        #FNC_DO_SAVE()
-        print("Not needed for modded server, backups taken periodically")
+        FNC_DO_SAVE()
+    elif email:
+        EMAIL()
 
     if cmdline:
         ## Close ssh connection
